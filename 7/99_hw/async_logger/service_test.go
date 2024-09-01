@@ -2,7 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"log"
+	"reflect"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,6 +163,7 @@ func TestACL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("[2] ACL fail: unexpected error: %v", err)
 	}
+
 	_, err = biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
 	if err != nil {
 		t.Fatalf("[3] ACL fail: unexpected error: %v", err)
@@ -172,7 +179,6 @@ func TestACL(t *testing.T) {
 	}
 }
 
-/*
 func TestLogging(t *testing.T) {
 	ctx, finish := context.WithCancel(context.Background())
 	err := StartMyMicroservice(ctx, listenAddr, ACLData)
@@ -217,7 +223,7 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 4; i++ {
 			evt, err := logStream1.Recv()
-			// log.Println("logger 1", evt, err)
+			log.Println("logger 1", evt, err)
 			if err != nil {
 				t.Errorf("unexpected error: %v, awaiting event", err)
 				return
@@ -237,7 +243,7 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 3; i++ {
 			evt, err := logStream2.Recv()
-			// log.Println("logger 2", evt, err)
+			log.Println("logger 2", evt, err)
 			if err != nil {
 				t.Errorf("unexpected error: %v, awaiting event", err)
 				return
@@ -316,12 +322,12 @@ func TestStat(t *testing.T) {
 		for {
 			stat, err := statStream1.Recv()
 			if err != nil && err != io.EOF {
-				// fmt.Printf("unexpected error %v\n", err)
+				fmt.Printf("unexpected error %v\n", err)
 				return
 			} else if err == io.EOF {
 				break
 			}
-			// log.Println("stat1", stat, err)
+			log.Println("stat1", stat, err)
 			mu.Lock()
 			// это грязный хак
 			// protobuf добавляет к структуре свои поля, которвые не видны при приведении к строке и при reflect.DeepEqual
@@ -337,12 +343,12 @@ func TestStat(t *testing.T) {
 		for {
 			stat, err := statStream2.Recv()
 			if err != nil && err != io.EOF {
-				// fmt.Printf("unexpected error %v\n", err)
+				fmt.Printf("unexpected error %v\n", err)
 				return
 			} else if err == io.EOF {
 				break
 			}
-			// log.Println("stat2", stat, err)
+			log.Println("stat2", stat, err)
 			mu.Lock()
 			// это грязный хак
 			// protobuf добавляет к структуре свои поля, которвые не видны при приведении к строке и при reflect.DeepEqual
@@ -553,4 +559,3 @@ func __dummyLog() {
 	fmt.Println(1)
 	log.Println(1)
 }
-*/

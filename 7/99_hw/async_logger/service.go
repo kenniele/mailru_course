@@ -12,7 +12,9 @@ import (
 	"google.golang.org/protobuf/runtime/protoimpl"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
+	"time"
 )
 
 // тут вы пишете код
@@ -27,45 +29,148 @@ const (
 )
 
 type bizServer struct {
-	ACL string
 }
 
-func (b bizServer) Check(ctx context.Context, nothing *Nothing) (*Nothing, error) {
-	fmt.Println("IN CHECK FUNC")
+type admServer struct {
+	mu    sync.RWMutex
+	logs  map[string][]*Event
+	stats map[string]*Stat
+}
+
+type masterServer struct {
+	admSrv *admServer
+	bizSrv *bizServer
+}
+
+func (s *masterServer) saveLog(logger, consumer, method, host string) {
+	s.admSrv.mu.Lock()
+	defer s.admSrv.mu.Unlock()
+
+	evt := &Event{
+		Consumer: consumer,
+		Method:   method,
+		Host:     host,
+	}
+
+	//fmt.Printf("Add %v, %v, %v by %v logger\n\n", consumer, method, host, logger)
+	if logger == "" {
+		//fmt.Printf("No logger, before - %v\n\n", s.admSrv.logs)
+		for k, _ := range s.admSrv.logs {
+			s.admSrv.logs[k] = append(s.admSrv.logs[k], evt)
+		}
+		//fmt.Printf("No logger, after - %v\n\n", s.admSrv.logs)
+	} else {
+		//fmt.Printf("Logger is in, before - %v\n\n", s.admSrv.logs)
+		if _, ok := s.admSrv.logs[logger]; !ok {
+			s.admSrv.logs[logger] = []*Event{}
+		}
+		for k, _ := range s.admSrv.logs {
+			if k != logger {
+				s.admSrv.logs[k] = append(s.admSrv.logs[k], evt)
+			}
+		}
+		//fmt.Printf("Logger is in, after - %v\n\n", s.admSrv.logs)
+	}
+}
+
+func (s *masterServer) saveStat(stat, consumer, method string) {
+	s.admSrv.mu.Lock()
+	defer s.admSrv.mu.Unlock()
+
+	if stat == "" {
+		for k := range s.admSrv.stats {
+			if _, ok := s.admSrv.stats[k].ByMethod[method]; !ok {
+				s.admSrv.stats[k].ByMethod[method] = 0
+			}
+			if _, ok := s.admSrv.stats[k].ByConsumer[consumer]; !ok {
+				s.admSrv.stats[k].ByConsumer[consumer] = 0
+			}
+			s.admSrv.stats[k].ByMethod[method] += 1
+			s.admSrv.stats[k].ByConsumer[consumer] += 1
+		}
+	} else {
+		if _, ok := s.admSrv.stats[stat]; !ok {
+			s.admSrv.stats[stat] = &Stat{
+				ByMethod:   map[string]uint64{},
+				ByConsumer: map[string]uint64{},
+			}
+		}
+		for k := range s.admSrv.stats {
+			if k != stat {
+				if _, ok := s.admSrv.stats[k].ByMethod[method]; !ok {
+					s.admSrv.stats[k].ByMethod[method] = 0
+				}
+				if _, ok := s.admSrv.stats[k].ByConsumer[consumer]; !ok {
+					s.admSrv.stats[k].ByConsumer[consumer] = 0
+				}
+				s.admSrv.stats[k].ByMethod[method] += 1
+				s.admSrv.stats[k].ByConsumer[consumer] += 1
+			}
+		}
+	}
+
+	fmt.Printf("Saved stat with cons=%v and method=%v, stats looks like %v now\n\n", consumer, method, s.admSrv.stats)
+}
+
+func (s *admServer) Logging(nothing *Nothing, server Admin_LoggingServer) error {
+	time.Sleep(time.Second * 2)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	md, _ := metadata.FromIncomingContext(server.Context())
+	cons := md["consumer"][0]
+	//fmt.Printf("Now logs is %v with cons %v\n\n", s.logs, cons)
+
+	for _, log := range s.logs[cons] {
+		if log.Consumer != cons {
+			//fmt.Printf("Send %+v by %v\n\n", log, cons)
+			if err := server.Send(log); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *admServer) Statistics(interval *StatInterval, server Admin_StatisticsServer) error {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(interval.IntervalSeconds))
+	defer cancel()
+	md, _ := metadata.FromIncomingContext(server.Context())
+	cons := md["consumer"][0]
+	fmt.Printf("Stats by method - %v\nStats by consumer - %v\n\n", a.stats[cons].ByMethod, a.stats[cons].ByConsumer)
+	var err error
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				time.Sleep(time.Second * time.Duration(interval.IntervalSeconds))
+				fmt.Println("context was done")
+				fmt.Printf("Stats by method - %v\nStats by cons -%v\n\n", a.stats[cons].ByMethod, a.stats[cons].ByConsumer)
+				a.mu.RLock()
+				err = server.Send(a.stats[cons])
+				a.mu.RUnlock()
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return err
+}
+
+func (a admServer) mustEmbedUnimplementedAdminServer() {
+}
+
+func (b *bizServer) Check(ctx context.Context, nothing *Nothing) (*Nothing, error) {
 	return nothing, nil
 }
 
-func (b bizServer) Add(ctx context.Context, nothing *Nothing) (*Nothing, error) {
-	fmt.Println("IN ADD FUNC")
+func (b *bizServer) Add(ctx context.Context, nothing *Nothing) (*Nothing, error) {
 	return nothing, nil
 }
 
-func (b bizServer) Test(ctx context.Context, nothing *Nothing) (*Nothing, error) {
-	fmt.Println("IN TEST FUNC")
-	rawACL := ctx.Value("ACL").(string)
-	var acl map[string][]string
-	acl, err := unmACL(rawACL)
-	if err != nil {
-		return nothing, err
-	}
-
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "missing metadata")
-	}
-	consumerName := md["consumer"]
-	if len(consumerName) == 0 {
-		return nil, status.Error(codes.Unauthenticated, "missing consumer")
-	}
-
-	if consumerName == nil {
-		return nothing, status.Error(codes.Unauthenticated, "")
-	}
-
-	if _, ok = acl[consumerName[0]]; !ok {
-		return nothing, status.Error(codes.Unauthenticated, "")
-	}
-
+func (b *bizServer) Test(ctx context.Context, nothing *Nothing) (*Nothing, error) {
 	return nothing, nil
 }
 
@@ -73,12 +178,16 @@ func (b bizServer) mustEmbedUnimplementedBizServer() {
 
 }
 
-func newBizServer() bizServer {
-	return bizServer{}
+func newBizServer() *bizServer {
+	return &bizServer{}
 }
 
-func (b bizServer) AddGlobalVar(ACL string) {
-	b.ACL = ACL
+func newAdmServer() *admServer {
+	return &admServer{
+		logs:  map[string][]*Event{},
+		mu:    sync.RWMutex{},
+		stats: map[string]*Stat{},
+	}
 }
 
 func unmACL(ACL string) (map[string][]string, error) {
@@ -89,88 +198,126 @@ func unmACL(ACL string) (map[string][]string, error) {
 	return acl, nil
 }
 
-func checkACL(ctx context.Context, acl map[string][]string) error {
-	consumerName := ctx.Value("consumer")
-	fmt.Println(consumerName)
-	if consumerName == nil {
-		return status.Error(codes.Unauthenticated, "")
-	}
-
-	if _, ok := acl[consumerName.(string)]; !ok {
-		return status.Error(codes.Unauthenticated, "")
-	}
-
-	return nil
-}
-
 func StartMyMicroservice(ctx context.Context, listenAddr, ACLData string) error {
-	// запуск листенера на сервер
-	lis, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		return status.Error(codes.Unavailable, "failed to listen")
-	}
-	defer lis.Close()
-
 	// анмаршалинг ACL
 	acl, err := unmACL(ACLData)
 	if err != nil {
 		return status.Error(codes.Unauthenticated, "failed to parse ACL")
 	}
 
-	// интерсептор
-	checkACLInterceptor := func(
-		ctx context.Context,
-		req interface{},
-		info *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler,
-	) (interface{}, error) {
-		md, ok := metadata.FromIncomingContext(ctx)
-		if !ok {
-			return nil, status.Error(codes.Unauthenticated, "missing metadata")
-		}
-
-		consumerNames := md["consumer"]
-		if len(consumerNames) == 0 {
-			return nil, status.Error(codes.Unauthenticated, "missing consumer")
-		}
-		consumerName := consumerNames[0]
-
-		ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("ACL", ACLData, "consumer", consumerName))
-
-		if err = checkACL(ctx, acl); err != nil {
-			return nil, status.Error(codes.PermissionDenied, "access denied")
-		}
-
-		return handler(ctx, req)
+	// запуск листенера на сервер
+	lis, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		lis.Close()
+		return status.Error(codes.Unavailable, "failed to listen")
 	}
 
+	// Канал для ошибок
+	errChan := make(chan error, 2)
+
+	admSrv := newAdmServer()
+	bizSrv := newBizServer()
+
+	masterSrv := &masterServer{
+		admSrv: admSrv,
+		bizSrv: bizSrv,
+	}
+
+	// интерсептор для не стриминга
+	aclInterceptor := func(mstSrv *masterServer) grpc.UnaryServerInterceptor {
+		return func(
+			ctx context.Context,
+			req interface{},
+			info *grpc.UnaryServerInfo,
+			handler grpc.UnaryHandler,
+		) (interface{}, error) {
+			md, ok := metadata.FromIncomingContext(ctx)
+			if !ok {
+				return nil, status.Error(codes.Unauthenticated, "missing metadata")
+			}
+
+			consMD, ok := md["consumer"]
+			if !ok {
+				return nil, status.Error(codes.Unauthenticated, "missing metadata")
+			}
+
+			cons := consMD[0]
+			if _, ok = acl[cons]; !ok {
+				return nil, status.Error(codes.Unauthenticated, "no consumer")
+			}
+
+			sl := acl[cons]
+			for _, v := range sl {
+				if strings.HasSuffix(v, "*") || v == info.FullMethod {
+					mstSrv.saveLog("", cons, info.FullMethod, "127.0.0.1:8084")
+					mstSrv.saveStat("", cons, info.FullMethod)
+					return handler(ctx, req)
+				}
+			}
+
+			return nil, status.Error(codes.Unauthenticated, "")
+		}
+	}
+
+	// интерсептор для стриминга
+	streamInterceptor := func(mstSrv *masterServer) grpc.StreamServerInterceptor {
+		return func(
+			srv interface{},
+			ss grpc.ServerStream,
+			info *grpc.StreamServerInfo,
+			handler grpc.StreamHandler,
+		) error {
+			md, ok := metadata.FromIncomingContext(ss.Context())
+			if !ok {
+				return status.Error(codes.Internal, "no metadata")
+			}
+
+			consMD, ok := md["consumer"]
+			if !ok {
+				return status.Error(codes.Internal, "no consumerName")
+			}
+
+			cons := consMD[0]
+
+			if _, ok = acl[cons]; !ok {
+				return status.Error(codes.Unauthenticated, "unknown consumer")
+			}
+			fmt.Println("Info -", cons, info.FullMethod)
+
+			mstSrv.saveLog(cons, cons, info.FullMethod, "127.0.0.1:8084")
+			mstSrv.saveStat(cons, cons, info.FullMethod)
+
+			return handler(srv, ss)
+		}
+	}
 	// grpc сервер с зареганным интерсептором
 	server := grpc.NewServer(
-		grpc.UnaryInterceptor(checkACLInterceptor),
+		grpc.UnaryInterceptor(aclInterceptor(masterSrv)),
+		grpc.StreamInterceptor(streamInterceptor(masterSrv)),
 	)
 
-	//newBizServer - сгенеренная функция создания сервера
-	RegisterBizServer(server, newBizServer())
+	RegisterAdminServer(server, masterSrv.admSrv)
 
-	// Канал для ошибок
-	errChan := make(chan error, 1)
+	//newBizServer - сгенеренная функция создания сервера
+	RegisterBizServer(server, masterSrv.bizSrv)
 
 	// параллелю работу сервера
 	go func() {
-		defer server.Stop()
-		defer close(errChan)
 		if err = server.Serve(lis); err != nil {
 			errChan <- err
 		}
 	}()
 
-	// селект для отлавливания cancel контекста (тут проблема)
-	select {
-	case <-ctx.Done():
-		return nil
-	case err = <-errChan:
-		return err
-	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			server.Stop()
+			lis.Close()
+		case err = <-errChan:
+			server.Stop()
+		}
+	}()
+	return err
 }
 
 type Event struct {
