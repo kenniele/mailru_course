@@ -32,9 +32,10 @@ type bizServer struct {
 }
 
 type admServer struct {
-	mu    sync.RWMutex
-	logs  map[string][]*Event
-	stats map[string]*Stat
+	mu        sync.RWMutex
+	logs      map[string][]*Event
+	sentStats map[string]*Stat
+	stats     map[string]*Stat
 }
 
 type masterServer struct {
@@ -73,43 +74,34 @@ func (s *masterServer) saveLog(logger, consumer, method, host string) {
 	}
 }
 
-func (s *masterServer) saveStat(stat, consumer, method string) {
-	s.admSrv.mu.Lock()
-	defer s.admSrv.mu.Unlock()
+func (s *admServer) saveStat(stat, consumer, method string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	if stat == "" {
-		for k := range s.admSrv.stats {
-			if _, ok := s.admSrv.stats[k].ByMethod[method]; !ok {
-				s.admSrv.stats[k].ByMethod[method] = 0
-			}
-			if _, ok := s.admSrv.stats[k].ByConsumer[consumer]; !ok {
-				s.admSrv.stats[k].ByConsumer[consumer] = 0
-			}
-			s.admSrv.stats[k].ByMethod[method] += 1
-			s.admSrv.stats[k].ByConsumer[consumer] += 1
+		for _, v := range s.stats {
+			s.updateStat(v, consumer, method)
 		}
 	} else {
-		if _, ok := s.admSrv.stats[stat]; !ok {
-			s.admSrv.stats[stat] = &Stat{
-				ByMethod:   map[string]uint64{},
-				ByConsumer: map[string]uint64{},
+		if _, ok := s.stats[stat]; !ok {
+			s.stats[stat] = &Stat{
+				ByMethod:   make(map[string]uint64),
+				ByConsumer: make(map[string]uint64),
 			}
 		}
-		for k := range s.admSrv.stats {
+		for k, v := range s.stats {
 			if k != stat {
-				if _, ok := s.admSrv.stats[k].ByMethod[method]; !ok {
-					s.admSrv.stats[k].ByMethod[method] = 0
-				}
-				if _, ok := s.admSrv.stats[k].ByConsumer[consumer]; !ok {
-					s.admSrv.stats[k].ByConsumer[consumer] = 0
-				}
-				s.admSrv.stats[k].ByMethod[method] += 1
-				s.admSrv.stats[k].ByConsumer[consumer] += 1
+				s.updateStat(v, consumer, method)
 			}
 		}
 	}
 
-	fmt.Printf("Saved stat with cons=%v and method=%v, stats looks like %v now\n\n", consumer, method, s.admSrv.stats)
+	//fmt.Printf("Saved stat with cons=%v and method=%v, stats looks like %v now\n\n", consumer, method, s.admSrv.stats)
+}
+
+func (s *admServer) updateStat(stat *Stat, consumer, method string) {
+	stat.ByMethod[method] += 1
+	stat.ByConsumer[consumer] += 1
 }
 
 func (s *admServer) Logging(nothing *Nothing, server Admin_LoggingServer) error {
@@ -119,7 +111,6 @@ func (s *admServer) Logging(nothing *Nothing, server Admin_LoggingServer) error 
 	md, _ := metadata.FromIncomingContext(server.Context())
 	cons := md["consumer"][0]
 	//fmt.Printf("Now logs is %v with cons %v\n\n", s.logs, cons)
-
 	for _, log := range s.logs[cons] {
 		if log.Consumer != cons {
 			//fmt.Printf("Send %+v by %v\n\n", log, cons)
@@ -133,30 +124,40 @@ func (s *admServer) Logging(nothing *Nothing, server Admin_LoggingServer) error 
 }
 
 func (a *admServer) Statistics(interval *StatInterval, server Admin_StatisticsServer) error {
-	ctx := context.Background()
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(interval.IntervalSeconds))
-	defer cancel()
+	dur := time.Duration(interval.IntervalSeconds * 1_000_000_000)
+	ticker := time.NewTicker(dur)
 	md, _ := metadata.FromIncomingContext(server.Context())
 	cons := md["consumer"][0]
-	fmt.Printf("Stats by method - %v\nStats by consumer - %v\n\n", a.stats[cons].ByMethod, a.stats[cons].ByConsumer)
-	var err error
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				time.Sleep(time.Second * time.Duration(interval.IntervalSeconds))
-				fmt.Println("context was done")
-				fmt.Printf("Stats by method - %v\nStats by cons -%v\n\n", a.stats[cons].ByMethod, a.stats[cons].ByConsumer)
-				a.mu.RLock()
-				err = server.Send(a.stats[cons])
-				a.mu.RUnlock()
-				if err != nil {
-					return
-				}
+	//fmt.Printf("Duration %v in seconds: %v\n", cons, dur.Seconds())
+	//fmt.Printf("Statistics function was invoked by %v\n", cons)
+	//start := time.Now()
+
+	for {
+		select {
+		case <-server.Context().Done():
+			fmt.Println("CONTEXT WAS DONE BY", cons)
+			return nil
+		case <-ticker.C:
+			a.mu.Lock()
+			//fmt.Printf("%v stats - %+v\n\n", cons, a.stats[cons])
+			currStat := a.stats[cons]
+			err := server.Send(currStat)
+			a.clearCons(cons)
+			a.mu.Unlock()
+			if err != nil {
+				return err
 			}
+			fmt.Println("TICKER WAS DONE BY", cons)
+			//fmt.Println("Before break, stats look like", a.stats)
 		}
-	}()
-	return err
+	}
+}
+
+func (a *admServer) clearCons(cons string) {
+	a.stats[cons] = &Stat{
+		ByMethod:   make(map[string]uint64),
+		ByConsumer: make(map[string]uint64),
+	}
 }
 
 func (a admServer) mustEmbedUnimplementedAdminServer() {
@@ -250,7 +251,7 @@ func StartMyMicroservice(ctx context.Context, listenAddr, ACLData string) error 
 			for _, v := range sl {
 				if strings.HasSuffix(v, "*") || v == info.FullMethod {
 					mstSrv.saveLog("", cons, info.FullMethod, "127.0.0.1:8084")
-					mstSrv.saveStat("", cons, info.FullMethod)
+					admSrv.saveStat("", cons, info.FullMethod)
 					return handler(ctx, req)
 				}
 			}
@@ -282,10 +283,9 @@ func StartMyMicroservice(ctx context.Context, listenAddr, ACLData string) error 
 			if _, ok = acl[cons]; !ok {
 				return status.Error(codes.Unauthenticated, "unknown consumer")
 			}
-			fmt.Println("Info -", cons, info.FullMethod)
 
 			mstSrv.saveLog(cons, cons, info.FullMethod, "127.0.0.1:8084")
-			mstSrv.saveStat(cons, cons, info.FullMethod)
+			admSrv.saveStat(cons, cons, info.FullMethod)
 
 			return handler(srv, ss)
 		}
@@ -314,7 +314,7 @@ func StartMyMicroservice(ctx context.Context, listenAddr, ACLData string) error 
 			server.Stop()
 			lis.Close()
 		case err = <-errChan:
-			server.Stop()
+			server.GracefulStop()
 		}
 	}()
 	return err

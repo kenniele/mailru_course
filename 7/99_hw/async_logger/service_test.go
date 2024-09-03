@@ -223,7 +223,7 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 4; i++ {
 			evt, err := logStream1.Recv()
-			log.Println("logger 1", evt, err)
+			log.Println("logger 1", evt, err, i)
 			if err != nil {
 				t.Errorf("unexpected error: %v, awaiting event", err)
 				return
@@ -243,7 +243,7 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 3; i++ {
 			evt, err := logStream2.Recv()
-			log.Println("logger 2", evt, err)
+			log.Println("logger 2", evt, err, i)
 			if err != nil {
 				t.Errorf("unexpected error: %v, awaiting event", err)
 				return
@@ -320,6 +320,7 @@ func TestStat(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		for {
+			fmt.Println("RECV FUNC WAS INVOKED BY STATSTREAM1")
 			stat, err := statStream1.Recv()
 			if err != nil && err != io.EOF {
 				fmt.Printf("unexpected error %v\n", err)
@@ -327,7 +328,7 @@ func TestStat(t *testing.T) {
 			} else if err == io.EOF {
 				break
 			}
-			log.Println("stat1", stat, err)
+			//log.Println("stat1", stat, err)
 			mu.Lock()
 			// это грязный хак
 			// protobuf добавляет к структуре свои поля, которвые не видны при приведении к строке и при reflect.DeepEqual
@@ -341,6 +342,7 @@ func TestStat(t *testing.T) {
 	}()
 	go func() {
 		for {
+			fmt.Println("RECV FUNC WAS INVOKED BY STATSTREAM2")
 			stat, err := statStream2.Recv()
 			if err != nil && err != io.EOF {
 				fmt.Printf("unexpected error %v\n", err)
@@ -348,7 +350,7 @@ func TestStat(t *testing.T) {
 			} else if err == io.EOF {
 				break
 			}
-			log.Println("stat2", stat, err)
+			//log.Println("stat2", stat, err)
 			mu.Lock()
 			// это грязный хак
 			// protobuf добавляет к структуре свои поля, которвые не видны при приведении к строке и при reflect.DeepEqual
@@ -368,7 +370,6 @@ func TestStat(t *testing.T) {
 	biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
 
 	wait(200) // 2 sec
-
 	expectedStat1 := &Stat{
 		ByMethod: map[string]uint64{
 			"/main.Biz/Check":        1,
@@ -416,9 +417,11 @@ func TestStat(t *testing.T) {
 	}
 
 	mu.Lock()
+	fmt.Printf("Stat1 %+v\nExpectedStat1 %+v\n\n", stat1, expectedStat1)
 	if !reflect.DeepEqual(stat1, expectedStat1) {
 		t.Fatalf("stat1-2 dont match\nhave %+v\nwant %+v", stat1, expectedStat1)
 	}
+	fmt.Printf("Stat2 %+v\nExpectedStat2 %+v\n\n", stat2, expectedStat2)
 	if !reflect.DeepEqual(stat2, expectedStat2) {
 		t.Fatalf("stat2 dont match\nhave %+v\nwant %+v", stat2, expectedStat2)
 	}
