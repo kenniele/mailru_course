@@ -108,27 +108,27 @@ type ErrorCase struct {
 // писать надо именно в то что пришло
 func TestErrors(t *testing.T) {
 	cases := []ErrorCase{
-		// "Active":"DA" - string вместо bool
+		// "Active":"DA" - string вместо bool - ловлю
 		ErrorCase{
 			&Simple{},
 			`{"ID":42,"Username":"rvasily","Active":"DA"}`,
 		},
-		// "ID":"42" - string вместо int
+		// "ID":"42" - string вместо int - ловлю
 		ErrorCase{
 			&Simple{},
 			`{"ID":"42","Username":"rvasily","Active":true}`,
 		},
-		// "Username":100500 - int вместо string
+		// "Username":100500 - int вместо string - ловлю
 		ErrorCase{
 			&Simple{},
 			`{"ID":42,"Username":100500,"Active":true}`,
 		},
-		// "ManySimple":{} - ждём слайс, получаем структуру
+		// "ManySimple":{} - ждём слайс, получаем структуру - ловлю
 		ErrorCase{
 			&Complex{},
 			`{"SubSimple":{"ID":42,"Username":"rvasily","Active":true},"ManySimple":{}}`,
 		},
-		// "SubSimple":true - ждём структуру, получаем bool
+		// "SubSimple":true - ждём структуру, получаем bool - ловлю
 		ErrorCase{
 			&Complex{},
 			`{"SubSimple":true,"ManySimple":[{"ID":42,"Username":"rvasily","Active":true}]}`,
@@ -139,7 +139,7 @@ func TestErrors(t *testing.T) {
 			`[{"ID":42,"Username":"rvasily","Active":true}]`,
 		},
 		// Simple{} ( без амперсанта, т.е. структура, а не указатель на структуру )
-		// пришел не ссылочный тип - мы не сможем вернуть результат
+		// пришел не ссылочный тип - мы не сможем вернуть результат - ловлю
 		ErrorCase{
 			Simple{},
 			`{"ID":42,"Username":"rvasily","Active":true}`,
