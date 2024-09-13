@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/mcuadros/go-lookup"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mcuadros/go-lookup"
 	"gopkg.in/d4l3k/messagediff.v1"
 )
 
@@ -120,6 +120,7 @@ func TestApp(t *testing.T) {
 	}
 
 	testCases := []*ApiTestCase{
+
 		&ApiTestCase{
 			Name:           "Auth - Register",
 			Method:         "POST",
@@ -384,6 +385,36 @@ func TestApp(t *testing.T) {
 		},
 
 		&ApiTestCase{
+			Name:           "No Auth - Current User - No Auth",
+			Method:         "GET",
+			URL:            "{{APIURL}}/user",
+			TokenName:      "", // none
+			ResponseStatus: 401,
+		},
+		&ApiTestCase{
+			Name:           "No Auth - Current User Logout - Require Auth",
+			Method:         "POST",
+			URL:            "{{APIURL}}/user/logout",
+			TokenName:      "", // none
+			ResponseStatus: 401,
+		},
+
+		&ApiTestCase{
+			Name:           "No Auth - Current User Logout",
+			Method:         "POST",
+			URL:            "{{APIURL}}/user/logout",
+			TokenName:      "token1",
+			ResponseStatus: 200,
+		},
+		&ApiTestCase{
+			Name:           "No Auth - Current User - No Auth after logout",
+			Method:         "GET",
+			URL:            "{{APIURL}}/user",
+			TokenName:      "token1",
+			ResponseStatus: 401,
+		},
+
+		&ApiTestCase{
 			Name:           "Articles - by author",
 			Method:         "GET",
 			URL:            "{{APIURL}}/articles?author={{USERNAME2}}",
@@ -445,35 +476,6 @@ func TestApp(t *testing.T) {
 			Before: nil,
 			After:  nil,
 		},
-
-		&ApiTestCase{
-			Name:           "No Auth - Current User - No Auth",
-			Method:         "GET",
-			URL:            "{{APIURL}}/user",
-			TokenName:      "", // none
-			ResponseStatus: 401,
-		},
-		&ApiTestCase{
-			Name:           "No Auth - Current User Logout - Require Auth",
-			Method:         "POST",
-			URL:            "{{APIURL}}/user/logout",
-			TokenName:      "", // none
-			ResponseStatus: 401,
-		},
-		&ApiTestCase{
-			Name:           "No Auth - Current User Logout",
-			Method:         "POST",
-			URL:            "{{APIURL}}/user/logout",
-			TokenName:      "token1",
-			ResponseStatus: 200,
-		},
-		&ApiTestCase{
-			Name:           "No Auth - Current User - No Auth after logout",
-			Method:         "GET",
-			URL:            "{{APIURL}}/user",
-			TokenName:      "token1",
-			ResponseStatus: 401,
-		},
 	}
 
 	for _, item := range testCases {
@@ -502,6 +504,8 @@ func TestApp(t *testing.T) {
 			if item.TokenName != "" {
 				req.Header.Add("Authorization", "Token "+tplParams[item.TokenName])
 			}
+			fmt.Printf("Request - %+v \n", req)
+			fmt.Printf("[%v] %v request was send on %v\n", item.Name, item.Method, item.URL)
 
 			resp, err := client.Do(req)
 			if err != nil {
@@ -510,7 +514,7 @@ func TestApp(t *testing.T) {
 			defer resp.Body.Close()
 			respBody, err := ioutil.ReadAll(resp.Body)
 
-			// t.Logf("\nreq body: %s\nresp body: %s", body, respBody)
+			t.Logf("\nreq body: %s\nresp body: %s", body, respBody)
 
 			if item.ResponseStatus != resp.StatusCode {
 				t.Fatalf("bad status code, want: %v, have:%v", item.ResponseStatus, resp.StatusCode)

@@ -1,0 +1,11 @@
+services:
+  dbMysql:
+    image: mariadb:10.7
+    restart: always
+    ports:
+      - 3306:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: "love"
+      MYSQL_DATABASE: photolist
+    volumes:
+      - './_mysql/:/docker-entrypoint-initdb.d/'
